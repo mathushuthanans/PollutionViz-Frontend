@@ -1,0 +1,423 @@
+// backend_url.dart
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+
+/// Central backend API URL configuration.
+/// - For Android Emulator local testing: 'http://10.0.2.2:8000'
+/// - For Physical Device (same Wi-Fi): 'http://<YOUR_LOCAL_IP>:8000'
+/// - For Deployed Production: 'https://pollutionviz-3hta.onrender.com'
+const String baseURL = 'https://pollutionviz-backend-services.onrender.com';
+// NOTE: there is intentionally no default location here. Callers must pass the
+// user's resolved location (see location_service.dart).
+
+// ==========================================
+// Dashboard & Trends Routes
+// ==========================================
+
+/// GET /get_location?lat={lat}&lon={lon}
+/// Fetches current air pollution, weather, and reverse-geocoded location data.
+Future<Map<String, dynamic>?> fetchDashboardData({
+  required double lat,
+  required double lon,
+}) async {
+  try {
+    final uri = Uri.parse('$baseURL/get_location?lat=$lat&lon=$lon');
+    final response = await http.get(uri);
+
+    if (response.statusCode == 200) {
+      final jsonData = json.decode(response.body);
+      if (jsonData is Map<String, dynamic> && jsonData.containsKey('data')) {
+        return jsonData['data'] as Map<String, dynamic>;
+      }
+      return jsonData as Map<String, dynamic>?;
+    } else {
+      throw Exception('Failed to load dashboard data (${response.statusCode}): ${response.body}');
+    }
+  } catch (e) {
+    print('API Error (fetchDashboardData): $e');
+    return null;
+  }
+}
+
+/// GET /get_trends?lat={lat}&lon={lon}&range={range}
+/// Fetches historical and forecast pollution trends (weekly, monthly, yearly).
+Future<Map<String, dynamic>?> fetchTrendsData({
+  required double lat,
+  required double lon,
+  String range = "weekly",
+}) async {
+  try {
+    final uri = Uri.parse('$baseURL/get_trends?lat=$lat&lon=$lon&range=$range');
+    final response = await http.get(uri);
+
+    if (response.statusCode == 200) {
+      final jsonData = json.decode(response.body);
+      return jsonData as Map<String, dynamic>;
+    } else {
+      throw Exception('Failed to load trends data (${response.statusCode}): ${response.body}');
+    }
+  } catch (e) {
+    print('API Error (fetchTrendsData): $e');
+    return null;
+  }
+}
+
+// ==========================================
+// Scenarios & Citizen Actions Routes
+// ==========================================
+
+/// GET /get_scenario_presets?lat={lat}&lon={lon}
+/// Fetches simulated negative future scenarios for the given coordinates.
+Future<List<dynamic>?> fetchScenarioPresets({
+  required double lat,
+  required double lon,
+}) async {
+  try {
+    final uri = Uri.parse('$baseURL/get_scenario_presets?lat=$lat&lon=$lon');
+    final response = await http.get(uri).timeout(const Duration(seconds: 15));
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      if (data is List) {
+        return data;
+      } else {
+        throw Exception('Expected List response, got ${data.runtimeType}');
+      }
+    } else {
+      throw Exception('Failed to load scenario presets (${response.statusCode}): ${response.body}');
+    }
+  } catch (e) {
+    print('API Error (fetchScenarioPresets): $e');
+    rethrow;
+  }
+}
+
+/// POST /citizen_actions?lat={lat}&lon={lon}
+/// Fetches recommended practical actions (do, dont, minimize) for citizens at the given coordinates.
+/// Note: Backend defines citizen_scenario_actions route taking query parameters lat & lon.
+Future<Map<String, dynamic>?> fetchCitizenActions({
+  required double lat,
+  required double lon,
+}) async {
+  try {
+    final uri = Uri.parse('$baseURL/citizen_actions?lat=$lat&lon=$lon');
+    final response = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+    ).timeout(const Duration(seconds: 15));
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      if (data is Map<String, dynamic>) {
+        return data;
+      } else {
+        throw Exception('Expected Map response, got ${data.runtimeType}');
+      }
+    } else {
+      throw Exception('Failed to load citizen actions (${response.statusCode}): ${response.body}');
+    }
+  } catch (e) {
+    print('API Error (fetchCitizenActions): $e');
+    rethrow;
+  }
+}
+
+// ==========================================
+// Health Impact Route
+// ==========================================
+
+/// GET /health_impact?lat={lat}&lon={lon}
+/// Analyzes health impact and returns risk level, sensitive groups, and exposure guidance.
+Future<Map<String, dynamic>?> fetchHealthImpact({
+  required double lat,
+  required double lon,
+}) async {
+  try {
+    final uri = Uri.parse('$baseURL/health_impact?lat=$lat&lon=$lon');
+    final response = await http.get(uri);
+
+    if (response.statusCode == 200) {
+      return json.decode(response.body) as Map<String, dynamic>;
+    } else {
+      throw Exception('Failed to load health impact (${response.statusCode}): ${response.body}');
+    }
+  } catch (e) {
+    print('API Error (fetchHealthImpact): $e');
+    return null;
+  }
+}
+
+// ==========================================
+// ML Service Routes
+// ==========================================
+
+/// POST /predict_health_risk
+/// Evaluates health risk scale based on pollutant concentrations and health conditions.
+Future<Map<String, dynamic>?> predictHealthRisk({
+  required double pm25,
+  required double pm10,
+  required double no2,
+  required double o3,
+  required double co,
+  int asthma = 0,
+  int heartDisease = 0,
+}) async {
+  try {
+    final uri = Uri.parse('$baseURL/predict_health_risk');
+    final response = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({
+        'pm25': pm25,
+        'pm10': pm10,
+        'no2': no2,
+        'o3': o3,
+        'co': co,
+        'asthma': asthma,
+        'heart_disease': heartDisease,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(response.body) as Map<String, dynamic>;
+    } else {
+      throw Exception('Failed predict_health_risk (${response.statusCode}): ${response.body}');
+    }
+  } catch (e) {
+    print('API Error (predictHealthRisk): $e');
+    return null;
+  }
+}
+
+/// POST /predict_region_class
+/// Predicts region category class from pollutant values.
+Future<Map<String, dynamic>?> predictRegionClass({
+  required double pm25,
+  required double pm10,
+  required double no2,
+  required double o3,
+  required double co,
+}) async {
+  try {
+    final uri = Uri.parse('$baseURL/predict_region_class');
+    final response = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({
+        'pm25': pm25,
+        'pm10': pm10,
+        'no2': no2,
+        'o3': o3,
+        'co': co,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(response.body) as Map<String, dynamic>;
+    } else {
+      throw Exception('Failed predict_region_class (${response.statusCode}): ${response.body}');
+    }
+  } catch (e) {
+    print('API Error (predictRegionClass): $e');
+    return null;
+  }
+}
+
+// ==========================================
+// Clarity AI Routes
+// ==========================================
+
+/// GET /help
+/// Returns Clarity AI assistant information.
+Future<String?> fetchClarityHelp() async {
+  try {
+    final uri = Uri.parse('$baseURL/help');
+    final response = await http.get(uri);
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      if (data is Map && data.containsKey('help')) {
+        return data['help'] as String;
+      }
+      return response.body;
+    } else {
+      throw Exception('Failed to load help (${response.statusCode})');
+    }
+  } catch (e) {
+    print('API Error (fetchClarityHelp): $e');
+    return null;
+  }
+}
+
+/// GET /explain?pollutant={pollutant}
+/// Returns simplified explanation, causes, and effects for a pollutant.
+Future<dynamic> fetchExplainPollutant(String pollutant) async {
+  try {
+    final uri = Uri.parse('$baseURL/explain?pollutant=${Uri.encodeComponent(pollutant)}');
+    final response = await http.get(uri);
+
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    } else {
+      throw Exception('Failed explain (${response.statusCode}): ${response.body}');
+    }
+  } catch (e) {
+    print('API Error (fetchExplainPollutant): $e');
+    return null;
+  }
+}
+
+/// GET /myth_buster?claim={claim}
+/// Analyzes a pollution claim and returns verdict (True/False) + explanation.
+Future<dynamic> fetchMythBuster(String claim) async {
+  try {
+    final uri = Uri.parse('$baseURL/myth_buster?claim=${Uri.encodeComponent(claim)}');
+    final response = await http.get(uri);
+
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    } else {
+      throw Exception('Failed myth_buster (${response.statusCode}): ${response.body}');
+    }
+  } catch (e) {
+    print('API Error (fetchMythBuster): $e');
+    return null;
+  }
+}
+
+/// POST /compare_locations
+/// Compares pollution health impact between two locations.
+Future<dynamic> compareLocations({
+  required String location1,
+  required String location2,
+  double? pm25_1,
+  double? pm10_1,
+  double? pm25_2,
+  double? pm10_2,
+}) async {
+  try {
+    final uri = Uri.parse('$baseURL/compare_locations');
+    final response = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({
+        'location1': location1,
+        'location2': location2,
+        // Omitted -> backend geocodes the names and fetches live values.
+        if (pm25_1 != null) 'pm25_1': pm25_1,
+        if (pm10_1 != null) 'pm10_1': pm10_1,
+        if (pm25_2 != null) 'pm25_2': pm25_2,
+        if (pm10_2 != null) 'pm10_2': pm10_2,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    } else {
+      throw Exception('Failed compare_locations (${response.statusCode}): ${response.body}');
+    }
+  } catch (e) {
+    print('API Error (compareLocations): $e');
+    return null;
+  }
+}
+
+/// POST /health_risks
+/// Returns health risk summary for children, adults, elderly based on pollutants.
+Future<dynamic> fetchHealthRisks({
+  required double pm25,
+  required double pm10,
+  required double no2,
+  required double co,
+  required double o3,
+}) async {
+  try {
+    final uri = Uri.parse('$baseURL/health_risks');
+    final response = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({
+        'pm25': pm25,
+        'pm10': pm10,
+        'no2': no2,
+        'co': co,
+        'o3': o3,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    } else {
+      throw Exception('Failed health_risks (${response.statusCode}): ${response.body}');
+    }
+  } catch (e) {
+    print('API Error (fetchHealthRisks): $e');
+    return null;
+  }
+}
+
+/// POST /suggest_policies
+/// Suggests 3 effective policies based on location, AQI, and pollutant levels.
+Future<dynamic> suggestPolicies({
+  required String location,
+  required int aqi,
+  required double pm25,
+  required double pm10,
+  required double no2,
+  required double co,
+  required double o3,
+}) async {
+  try {
+    final uri = Uri.parse('$baseURL/suggest_policies');
+    final response = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({
+        'location': location,
+        'aqi': aqi,
+        'pm25': pm25,
+        'pm10': pm10,
+        'no2': no2,
+        'co': co,
+        'o3': o3,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    } else {
+      throw Exception('Failed suggest_policies (${response.statusCode}): ${response.body}');
+    }
+  } catch (e) {
+    print('API Error (suggestPolicies): $e');
+    return null;
+  }
+}
+
+/// POST /reduce_pollution_plan
+/// Generates a 3-point actionable plan to achieve a pollution reduction goal.
+Future<dynamic> reducePollutionPlan({
+  required String goal,
+  required String location,
+}) async {
+  try {
+    final uri = Uri.parse('$baseURL/reduce_pollution_plan');
+    final response = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({
+        'goal': goal,
+        'location': location,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    } else {
+      throw Exception('Failed reduce_pollution_plan (${response.statusCode}): ${response.body}');
+    }
+  } catch (e) {
+    print('API Error (reducePollutionPlan): $e');
+    return null;
+  }
+}
