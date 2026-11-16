@@ -39,6 +39,25 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Decode the large images once, before they scroll into view.
+    precacheImage(_bgImage(context), context);
+    for (final img in widget.feedbackImages) {
+      precacheImage(img, context);
+    }
+  }
+
+  /// Background decoded at screen resolution instead of full file size.
+  ImageProvider _bgImage(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    return ResizeImage(
+      const AssetImage('assets/some.png'),
+      width: (mq.size.width * mq.devicePixelRatio).round(),
+    );
+  }
+
+  @override
   void dispose() {
     _shineController.dispose();
     super.dispose();
@@ -67,11 +86,13 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         children: [
           // --- Background image with 75% transparency for HomePage ---
           Positioned.fill(
-            child: Opacity(
-              opacity: 0.25,
-              child: Image.asset(
-                'assets/some.png',
+            child: RepaintBoundary(
+              // `opacity` on the image avoids the offscreen layer that an
+              // Opacity widget forces on every frame.
+              child: Image(
+                image: _bgImage(context),
                 fit: BoxFit.cover,
+                opacity: const AlwaysStoppedAnimation(0.25),
               ),
             ),
           ),

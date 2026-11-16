@@ -129,6 +129,19 @@ class _ScenariosPageState extends State<ScenariosPage> {
   }
 
   Future<List<dynamic>> _fetchScenariosData() async {
+    // Cache first: the live call is a slow LLM request, so show the last result
+    // at once and refresh it in the background for the next visit.
+    if (_retryCount == 0) {
+      final cached = await loadCachedScenarioPresets(
+        lat: widget.lat,
+        lon: widget.lon,
+      );
+      if (cached != null && cached.isNotEmpty) {
+        fetchScenarioPresets(lat: widget.lat, lon: widget.lon)
+            .then((_) {}, onError: (_) {});
+        return cached;
+      }
+    }
     try {
       final data = await fetchScenarioPresets(
         lat: widget.lat,
@@ -151,6 +164,15 @@ class _ScenariosPageState extends State<ScenariosPage> {
   }
 
   Future<Map<String, dynamic>> _fetchRecommendedActions() async {
+    final cached = await loadCachedCitizenActions(
+      lat: widget.lat,
+      lon: widget.lon,
+    );
+    if (cached != null) {
+      fetchCitizenActions(lat: widget.lat, lon: widget.lon)
+          .then((_) {}, onError: (_) {});
+      return cached;
+    }
     try {
       final actions = await fetchCitizenActions(
         lat: widget.lat,

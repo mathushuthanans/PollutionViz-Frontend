@@ -74,6 +74,47 @@ class LocationService {
   static const _kLat = 'manual_lat';
   static const _kLon = 'manual_lon';
   static const _kLabel = 'manual_label';
+  static const _kDevLat = 'device_lat';
+  static const _kDevLon = 'device_lon';
+
+  /// Great-circle distance in km (Geolocator ships the maths).
+  static double distanceKm(AppLocation a, AppLocation b) =>
+      Geolocator.distanceBetween(a.lat, a.lon, b.lat, b.lon) / 1000;
+
+  static Future<void> _saveDevice(AppLocation loc) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble(_kDevLat, loc.lat);
+      await prefs.setDouble(_kDevLon, loc.lon);
+    } catch (_) {}
+  }
+
+  /// An instant answer with no GPS wait: the saved manual city, else the last
+  /// device position we stored, else the OS's last-known position. Null when
+  /// none exist (first run). Never prompts for permission.
+  static Future<AppLocation?> resolveFast() async {
+    final manual = await _loadManual();
+    if (manual != null) return manual;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final lat = prefs.getDouble(_kDevLat);
+      final lon = prefs.getDouble(_kDevLon);
+      if (lat != null && lon != null) {
+        return AppLocation(lat: lat, lon: lon, source: LocationSource.device);
+      }
+    } catch (_) {}
+    try {
+      final last = await Geolocator.getLastKnownPosition();
+      if (last != null) {
+        return AppLocation(
+          lat: last.latitude,
+          lon: last.longitude,
+          source: LocationSource.device,
+        );
+      }
+    } catch (_) {} // not supported on every platform (e.g. web)
+    return null;
+  }
 
   /// Remember a manual city choice across app restarts.
   static Future<void> saveManual(AppLocation loc) async {
@@ -145,11 +186,13 @@ class LocationService {
           timeLimit: Duration(seconds: 10),
         ),
       );
-      return AppLocation(
+      final result = AppLocation(
         lat: position.latitude,
         lon: position.longitude,
         source: LocationSource.device,
       );
+      _saveDevice(result);
+      return result;
     } catch (e) {
       return AppLocation.fallback('Could not get location ($e)');
     }

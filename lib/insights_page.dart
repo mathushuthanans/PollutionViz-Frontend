@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'api_cache.dart';
 import 'backend_url.dart';
 import 'dart:math' as math;
 import 'datamodels.dart';
@@ -20,22 +21,108 @@ class InsightsPage extends StatefulWidget {
 }
 
 class _InsightsPageState extends State<InsightsPage> {
-  late Future<Map<String, dynamic>?> _dashboardData;
-  late Future<TrendsData> _trendsData;
-  late Future<List<({String name, int aqi})>> _nearbyCities;
+  // Each section keeps its own state so it can paint as soon as *its* data
+  // (cached or fresh) is available, instead of waiting for everything.
+  Map<String, dynamic>? _dashboard;
+  DateTime? _dashSavedAt;
+  bool _dashRefreshing = false;
+  bool _dashFailed = false;
+
+  TrendsData? _trends;
+  bool _trendsLoading = true;
+
+  List<({String name, int aqi})>? _nearby;
+
   String _selectedRange = 'weekly';
 
   @override
   void initState() {
     super.initState();
-    _dashboardData = fetchDashboardData(lat: widget.lat, lon: widget.lon);
-    _trendsData = _fetchTrendsData(_selectedRange);
-    _nearbyCities = _fetchNearbyCities();
+    _loadDashboard();
+    _loadTrends(_selectedRange);
+    _loadNearby();
   }
 
-  /// Live AQI for the 3 preset cities closest to the user (excluding the user's
-  /// own city, i.e. anything within ~30 km).
-  Future<List<({String name, int aqi})>> _fetchNearbyCities() async {
+  /// Draws the cached dashboard immediately (if any), then swaps in fresh data.
+  Future<void> _loadDashboard() async {
+    setState(() {
+      _dashRefreshing = true;
+      _dashFailed = false;
+    });
+    // Start the network call first so it runs while the cache is read.
+    final freshFuture = fetchDashboardData(lat: widget.lat, lon: widget.lon);
+    final cached = await loadCachedDashboard(lat: widget.lat, lon: widget.lon);
+    if (!mounted) return;
+    if (cached != null && _dashboard == null) {
+      setState(() {
+        _dashboard = cached.data;
+        _dashSavedAt = cached.savedAt;
+      });
+    }
+    final fresh = await freshFuture;
+    if (!mounted) return;
+    setState(() {
+      if (fresh != null) {
+        _dashboard = fresh;
+        _dashSavedAt = DateTime.now();
+      } else if (_dashboard == null) {
+        _dashFailed = true;
+      }
+      _dashRefreshing = false;
+    });
+  }
+
+  Future<void> _loadTrends(String range) async {
+    setState(() => _trendsLoading = _trends == null);
+    final freshFuture = _fetchTrendsData(range);
+    final cached = await loadCachedTrends(
+      lat: widget.lat,
+      lon: widget.lon,
+      range: range,
+    );
+    if (!mounted || range != _selectedRange) return;
+    if (cached != null) {
+      try {
+        setState(() {
+          _trends = TrendsData.fromJson(cached.data);
+          _trendsLoading = false;
+        });
+      } catch (_) {}
+    }
+    final fresh = await freshFuture;
+    if (!mounted || range != _selectedRange) return;
+    setState(() {
+      _trends = fresh;
+      _trendsLoading = false;
+    });
+  }
+
+  /// Nearby cities: cached AQIs first, then live ones.
+  Future<void> _loadNearby() async {
+    final nearest = _nearestCities();
+    final cachedAqis = await Future.wait(
+      nearest.map((c) async {
+        final cached = await loadCachedDashboard(lat: c.lat, lon: c.lon);
+        return _toNearby(c, cached?.data);
+      }),
+    );
+    if (!mounted) return;
+    final cachedList = cachedAqis.whereType<({String name, int aqi})>().toList();
+    if (cachedList.isNotEmpty && _nearby == null) {
+      setState(() => _nearby = cachedList);
+    }
+    final fresh = await _fetchNearbyCities();
+    if (!mounted) return;
+    setState(() => _nearby = fresh);
+  }
+
+  ({String name, int aqi})? _toNearby(PresetCity c, Map<String, dynamic>? data) {
+    final aqi = data?['pollution']?['aqi'];
+    return aqi is num ? (name: c.name, aqi: aqi.round()) : null;
+  }
+
+  /// The 3 preset cities closest to the user, excluding anything within ~30 km.
+  List<PresetCity> _nearestCities() {
     double km(PresetCity c) {
       const r = 6371.0;
       double rad(double d) => d * math.pi / 180;
@@ -50,11 +137,15 @@ class _InsightsPageState extends State<InsightsPage> {
 
     final nearest = presetCities.where((c) => km(c) > 30).toList()
       ..sort((a, b) => km(a).compareTo(km(b)));
+    return nearest.take(3).toList();
+  }
+
+  /// Live AQI for the nearest preset cities.
+  Future<List<({String name, int aqi})>> _fetchNearbyCities() async {
     final results = await Future.wait(
-      nearest.take(3).map((c) async {
+      _nearestCities().map((c) async {
         final data = await fetchDashboardData(lat: c.lat, lon: c.lon);
-        final aqi = data?['pollution']?['aqi'];
-        return aqi is num ? (name: c.name, aqi: aqi.round()) : null;
+        return _toNearby(c, data);
       }),
     );
     return results.whereType<({String name, int aqi})>().toList();
@@ -313,10 +404,8 @@ class _InsightsPageState extends State<InsightsPage> {
   }
 
   void _onRangeChanged(String newRange) {
-    setState(() {
-      _selectedRange = newRange;
-      _trendsData = _fetchTrendsData(newRange);
-    });
+    setState(() => _selectedRange = newRange);
+    _loadTrends(newRange);
   }
 
   Color _getAqiColor(int aqi) {
@@ -341,45 +430,38 @@ class _InsightsPageState extends State<InsightsPage> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return FutureBuilder<Map<String, dynamic>?>(
-      future: _dashboardData,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
+    final data = _dashboard;
+    if (data == null) {
+      if (_dashFailed) {
+        return Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Text('Failed to load data'),
+              ElevatedButton(
+                onPressed: () {
+                  _loadDashboard();
+                  _loadTrends(_selectedRange);
+                  _loadNearby();
+                },
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
+        );
+      }
+      return _buildSkeleton(isDark);
+    }
+    {
 
-        if (snapshot.hasError || !snapshot.hasData) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Text('Failed to load data'),
-                ElevatedButton(
-                  onPressed: () => setState(() {
-                    _dashboardData = fetchDashboardData(
-                      lat: widget.lat,
-                      lon: widget.lon,
-                    );
-                    _trendsData = _fetchTrendsData(_selectedRange);
-                  }),
-                  child: const Text('Retry'),
-                ),
-              ],
-            ),
-          );
-        }
-
-        final data = snapshot.data!;
         final location = data['location'];
         final pollution = data['pollution'];
         final weather = data['weather'];
 
 
-        return SingleChildScrollView(
+        return ListView(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+          children: [
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -419,7 +501,9 @@ class _InsightsPageState extends State<InsightsPage> {
                   ),
                 ],
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 6),
+              _buildUpdatedLabel(isDark),
+              const SizedBox(height: 10),
               SizedBox(
                 height: 40,
                 child: ListView(
@@ -492,60 +576,137 @@ class _InsightsPageState extends State<InsightsPage> {
                 ],
               ),
               const SizedBox(height: 20),
-              CurrentAqiAdvisoryWidget(
-                aqi: pollution['aqi'],
-                status: pollution['aqi_status'],
-                color: _getAqiColor(pollution['aqi']),
-                advisory: _getHealthAdvisory(pollution['aqi']),
+              // The advisory card blinks forever; isolate its repaints.
+              RepaintBoundary(
+                child: CurrentAqiAdvisoryWidget(
+                  aqi: pollution['aqi'],
+                  status: pollution['aqi_status'],
+                  color: _getAqiColor(pollution['aqi']),
+                  advisory: _getHealthAdvisory(pollution['aqi']),
+                ),
               ),
               const SizedBox(height: 24),
-              FutureBuilder<TrendsData>(
-                future: _trendsData,
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-                  if (snapshot.hasError || !snapshot.hasData) {
-                    return const Text('Failed to load trends data');
-                  }
-                  return PollutionTrendsCard(trendsData: snapshot.data!);
-                },
-              ),
-              FutureBuilder<List<({String name, int aqi})>>(
-                future: _nearbyCities,
-                builder: (context, snap) {
-                  final nearby = snap.data;
-                  if (nearby == null || nearby.isEmpty) {
-                    return const SizedBox.shrink();
-                  }
-                  final current = (pollution['aqi'] as num).round();
-                  final regions = nearby.map((c) {
-                    final pct = current == 0
-                        ? 0
-                        : ((c.aqi - current) / current * 100).round();
-                    final lower = pct <= 0;
-                    return RegionAqi(
-                      name: c.name,
-                      aqi: c.aqi,
-                      trend: pct == 0
-                          ? 'same as here'
-                          : '${lower ? '↓' : '↑'} ${pct.abs()}% ${lower ? 'lower' : 'higher'}',
-                      color: _getAqiColor(c.aqi),
-                      trendColor: lower ? Colors.green : Colors.red,
-                    );
-                  }).toList();
-                  return RegionalComparisonCard(
-                    currentAqi: current,
-                    location: location['city'] ?? 'Current Location',
-                    regions: regions,
-                  );
-                },
-              ),
+              if (_trends != null)
+                RepaintBoundary(child: PollutionTrendsCard(trendsData: _trends!))
+              else if (_trendsLoading)
+                const _SkeletonBox(height: 220)
+              else
+                const Text('Failed to load trends data'),
+              if (_nearby != null && _nearby!.isNotEmpty)
+                _buildRegionalCard(pollution, location),
               const HealthImpactAnalysisCard(),
+          ],
+        );
+    }
+  }
+
+  Widget _buildUpdatedLabel(bool isDark) {
+    final color = isDark ? Colors.white54 : Colors.black45;
+    final saved = _dashSavedAt;
+    return Row(
+      children: [
+        if (_dashRefreshing)
+          SizedBox(
+            width: 12,
+            height: 12,
+            child: CircularProgressIndicator(strokeWidth: 2, color: color),
+          )
+        else
+          Icon(Icons.check_circle_outline, size: 14, color: color),
+        const SizedBox(width: 6),
+        Text(
+          _dashRefreshing
+              ? (saved != null
+                  ? 'Showing data from ${CachedJson.ageLabelOf(saved)} · updating…'
+                  : 'Updating…')
+              : 'Updated ${saved == null ? 'just now' : CachedJson.ageLabelOf(saved)}',
+          style: GoogleFonts.montserrat(fontSize: 12, color: color),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRegionalCard(dynamic pollution, dynamic location) {
+    final nearby = _nearby!;
+    final current = (pollution['aqi'] as num).round();
+    final regions = nearby.map((c) {
+      final pct = current == 0 ? 0 : ((c.aqi - current) / current * 100).round();
+      final lower = pct <= 0;
+      return RegionAqi(
+        name: c.name,
+        aqi: c.aqi,
+        trend: pct == 0
+            ? 'same as here'
+            : '${lower ? '↓' : '↑'} ${pct.abs()}% ${lower ? 'lower' : 'higher'}',
+        color: _getAqiColor(c.aqi),
+        trendColor: lower ? Colors.green : Colors.red,
+      );
+    }).toList();
+    return RegionalComparisonCard(
+      currentAqi: current,
+      location: location['city'] ?? 'Current Location',
+      regions: regions,
+    );
+  }
+
+  /// Placeholder layout shown while the very first load is in flight.
+  Widget _buildSkeleton(bool isDark) {
+    return SingleChildScrollView(
+      physics: const NeverScrollableScrollPhysics(),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Insights',
+            style: GoogleFonts.montserrat(
+              fontWeight: FontWeight.bold,
+              fontSize: 22,
+              color: isDark ? Colors.white : Colors.black87,
+            ),
+          ),
+          const SizedBox(height: 16),
+          const _SkeletonBox(height: 40),
+          const SizedBox(height: 16),
+          const Row(
+            children: [
+              Expanded(child: _SkeletonBox(height: 110)),
+              SizedBox(width: 12),
+              Expanded(child: _SkeletonBox(height: 110)),
             ],
           ),
-        );
-      },
+          const SizedBox(height: 12),
+          const Row(
+            children: [
+              Expanded(child: _SkeletonBox(height: 110)),
+              SizedBox(width: 12),
+              Expanded(child: _SkeletonBox(height: 110)),
+            ],
+          ),
+          const SizedBox(height: 20),
+          const _SkeletonBox(height: 120),
+          const SizedBox(height: 24),
+          const _SkeletonBox(height: 220),
+        ],
+      ),
+    );
+  }
+}
+
+/// A flat grey rounded box used as a loading placeholder.
+class _SkeletonBox extends StatelessWidget {
+  final double height;
+  const _SkeletonBox({required this.height});
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      height: height,
+      decoration: BoxDecoration(
+        color: isDark ? Colors.white10 : Colors.black.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(16),
+      ),
     );
   }
 }
@@ -937,7 +1098,8 @@ class PollutionTrendsGraph extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return CustomPaint(
+    return RepaintBoundary(
+      child: CustomPaint(
       painter: _TrendsGraphPainter(
         pm25Data: pm25Data,
         pm10Data: pm10Data,
@@ -948,6 +1110,7 @@ class PollutionTrendsGraph extends StatelessWidget {
         range: range,
       ),
       child: Container(),
+    ),
     );
   }
 }
@@ -1175,8 +1338,8 @@ class RegionalComparisonCard extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: Colors.grey.shade200,
                   borderRadius: BorderRadius.circular(14),
-                  image: const DecorationImage(
-                    image: AssetImage('assets/map_placeholder.png'),
+                  image: DecorationImage(
+                    image: ResizeImage(AssetImage('assets/map_placeholder.png'), width: 900),
                     fit: BoxFit.cover,
                   ),
                 ),

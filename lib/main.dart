@@ -90,9 +90,24 @@ class _MainNavigationState extends State<MainNavigation> {
   AppLocation? _location; // null while the first lookup is in flight
 
   Future<void> _resolveLocation({bool useSaved = true}) async {
-    setState(() => _location = null);
+    // Paint with the last known place straight away; correct it afterwards if
+    // the real GPS fix turns out to be somewhere else.
+    final fast = useSaved ? await LocationService.resolveFast() : null;
+    if (!mounted) return;
+    setState(() => _location = fast);
+
     final loc = await LocationService.resolve(useSaved: useSaved);
-    if (mounted) setState(() => _location = loc);
+    if (!mounted) return;
+    // Keep the current location (and the loaded pages) for small GPS drift;
+    // coordinates key the pages, so changing them would reload everything.
+    if (fast != null &&
+        loc.source != LocationSource.fallback &&
+        LocationService.distanceKm(fast, loc) < 3) {
+      return;
+    }
+    // A failed GPS lookup must not replace a usable last-known place.
+    if (fast != null && loc.source == LocationSource.fallback) return;
+    setState(() => _location = loc);
   }
 
   void _showLocationPicker() {
@@ -149,9 +164,10 @@ class _MainNavigationState extends State<MainNavigation> {
         onSignInStudent: () {},
         onSignInPolicyMaker: () {},
         feedbackImages: [
-          AssetImage('assets/feedback1.png'),
-          AssetImage('assets/feedback2.png'),
-          AssetImage('assets/feedback3.png'),
+          // Decoded at ~900px wide instead of full file size.
+          ResizeImage(AssetImage('assets/feedback1.png'), width: 900),
+          ResizeImage(AssetImage('assets/feedback2.png'), width: 900),
+          ResizeImage(AssetImage('assets/feedback3.png'), width: 900),
         ],
       ),
       opacity: 0.25, // HomePage: background visible
@@ -170,16 +186,30 @@ class _MainNavigationState extends State<MainNavigation> {
     ProfilePageScreen(), // No BgWrapper
   ];
 
+  // Tabs the user has opened. They stay alive (IndexedStack) so switching back
+  // is instant and nothing refetches, but unopened tabs cost nothing.
+  final Set<int> _visited = {1};
+
   Widget _buildBody() {
     final loc = _location;
     final needsLocation = _selectedIndex == 1 || _selectedIndex == 2;
     if (loc == null && needsLocation) {
       return const Center(child: CircularProgressIndicator());
     }
+    _visited.add(_selectedIndex);
     // Home/Profile don't need a location; use the fallback only to build the list.
-    final page = _buildPages(loc ?? const AppLocation.fallback())[_selectedIndex];
+    final pages = _buildPages(loc ?? const AppLocation.fallback());
+    final stack = IndexedStack(
+      index: _selectedIndex,
+      children: [
+        for (var i = 0; i < pages.length; i++)
+          _visited.contains(i) && !(loc == null && (i == 1 || i == 2))
+              ? pages[i]
+              : const SizedBox.shrink(),
+      ],
+    );
     if (loc == null || loc.source != LocationSource.fallback || !needsLocation) {
-      return page;
+      return stack;
     }
     return Column(
       children: [
@@ -195,7 +225,7 @@ class _MainNavigationState extends State<MainNavigation> {
             ),
           ],
         ),
-        Expanded(child: page),
+        Expanded(child: stack),
       ],
     );
   }
