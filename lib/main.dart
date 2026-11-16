@@ -1,10 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'profile_page.dart';
 import 'insights_page.dart';
 import 'chatbot_page.dart';
-import 'home_page.dart';
-import 'bg_wrapper.dart';
 import 'scenerios.dart';
 import 'location_service.dart';
 
@@ -84,7 +81,7 @@ class MainNavigation extends StatefulWidget {
 }
 
 class _MainNavigationState extends State<MainNavigation> {
-  int _selectedIndex = 1;
+  int _selectedIndex = 0;
   bool _showChatbot = false;
   Offset _chatbotOffset = const Offset(0, 0);
   AppLocation? _location; // null while the first lookup is in flight
@@ -158,20 +155,6 @@ class _MainNavigationState extends State<MainNavigation> {
   }
 
   List<Widget> _buildPages(AppLocation loc) => [
-    BgWrapper(
-      child: HomePage(
-        onTryAR: () {}, // your AR callback
-        onSignInStudent: () {},
-        onSignInPolicyMaker: () {},
-        feedbackImages: [
-          // Decoded at ~900px wide instead of full file size.
-          ResizeImage(AssetImage('assets/feedback1.png'), width: 900),
-          ResizeImage(AssetImage('assets/feedback2.png'), width: 900),
-          ResizeImage(AssetImage('assets/feedback3.png'), width: 900),
-        ],
-      ),
-      opacity: 0.25, // HomePage: background visible
-    ),
     // Keyed by coordinates so the pages reload when the location changes.
     InsightsPage(
       key: ValueKey('insights-${loc.lat}-${loc.lon}'),
@@ -182,33 +165,31 @@ class _MainNavigationState extends State<MainNavigation> {
       key: ValueKey('scenarios-${loc.lat}-${loc.lon}'),
       lat: loc.lat,
       lon: loc.lon,
+      locationLabel: loc.source == LocationSource.manual ? loc.label : null,
     ),
-    ProfilePageScreen(), // No BgWrapper
   ];
 
   // Tabs the user has opened. They stay alive (IndexedStack) so switching back
   // is instant and nothing refetches, but unopened tabs cost nothing.
-  final Set<int> _visited = {1};
+  final Set<int> _visited = {0};
 
   Widget _buildBody() {
     final loc = _location;
-    final needsLocation = _selectedIndex == 1 || _selectedIndex == 2;
-    if (loc == null && needsLocation) {
+    if (loc == null) {
       return const Center(child: CircularProgressIndicator());
     }
     _visited.add(_selectedIndex);
-    // Home/Profile don't need a location; use the fallback only to build the list.
-    final pages = _buildPages(loc ?? const AppLocation.fallback());
+    final pages = _buildPages(loc);
     final stack = IndexedStack(
       index: _selectedIndex,
       children: [
         for (var i = 0; i < pages.length; i++)
-          _visited.contains(i) && !(loc == null && (i == 1 || i == 2))
+          _visited.contains(i)
               ? pages[i]
               : const SizedBox.shrink(),
       ],
     );
-    if (loc == null || loc.source != LocationSource.fallback || !needsLocation) {
+    if (loc.source != LocationSource.fallback) {
       return stack;
     }
     return Column(
@@ -384,20 +365,12 @@ class _MainNavigationState extends State<MainNavigation> {
             },
             items: const [
               BottomNavigationBarItem(
-                icon: Icon(Icons.home_outlined),
-                label: 'Home',
-              ),
-              BottomNavigationBarItem(
                 icon: Icon(Icons.bar_chart_rounded),
                 label: 'Insights',
               ),
               BottomNavigationBarItem(
                 icon: Icon(Icons.view_in_ar),
                 label: 'Scenarios',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.person_outline),
-                label: 'Profile',
               ),
             ],
             type: BottomNavigationBarType.fixed,
@@ -511,63 +484,6 @@ class _ExportTile extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-// Placeholder for Home and Scenarios pages
-class PlaceholderPage extends StatelessWidget {
-  final String title;
-  const PlaceholderPage({super.key, required this.title});
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Text(title, style: Theme.of(context).textTheme.headlineMedium),
-    );
-  }
-}
-
-// Dummy HomePage, ScenariosPage remain as is
-
-// --- ProfilePageScreen wrapper for backend-friendly ProfilePage integration ---
-class ProfilePageScreen extends StatelessWidget {
-  const ProfilePageScreen({super.key});
-  @override
-  Widget build(BuildContext context) {
-    return ProfilePage(
-      userName: "Michael ",
-      location: "San Francisco, CA",
-      monitoringDays: 187,
-      profileImageUrl: "https://randomuser.me/api/portraits/men/32.jpg",
-      sensitivityLevel: "Moderate",
-      sensitivityColor: Colors.amber,
-      weeklyAverageAqi: 42,
-      weeklyAqiDown: true,
-      healthRiskLevel: "Low Risk",
-      healthRiskColor: Colors.green,
-      healthRiskPercent: 25,
-      savedLocations: [
-        SavedLocation(
-          name: "Home",
-          aqi: 32,
-          aqiColor: Colors.green,
-          icon: Icons.home_rounded,
-        ),
-        SavedLocation(
-          name: "Office",
-          aqi: 58,
-          aqiColor: Colors.amber,
-          icon: Icons.apartment_rounded,
-        ),
-      ],
-      notificationPrefs: NotificationPrefs(
-        dailyExposureAlerts: true,
-        highPollutionWarnings: true,
-        weeklyReportReminders: false,
-      ),
-      onEditProfile: () {},
-      onViewFullReport: () {},
-      onAddLocation: () {},
     );
   }
 }

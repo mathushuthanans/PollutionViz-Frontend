@@ -66,8 +66,4 @@ flutter:
 
   # To add assets to your application, add an assets section, like this:
   assets:
-    - assets/feedback1.png
-    - assets/feedback2.png
-    - assets/feedback3.png
-    - assets/some.png
     - assets/map_placeholder.png

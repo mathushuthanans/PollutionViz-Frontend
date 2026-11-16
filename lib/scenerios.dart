@@ -95,10 +95,15 @@ class ScenariosPage extends StatefulWidget {
   final double lat;
   final double lon;
 
+  /// Name for the place (manual picks). When null, the city is looked up from
+  /// the backend's reverse geocoding for [lat]/[lon].
+  final String? locationLabel;
+
   const ScenariosPage({
     super.key,
     required this.lat,
     required this.lon,
+    this.locationLabel,
   });
 
   @override
@@ -112,11 +117,30 @@ class _ScenariosPageState extends State<ScenariosPage> {
   bool _actionsExpanded = false;
   int _retryCount = 0;
   final int _maxRetries = 3;
+  String? _city;
 
   @override
   void initState() {
     super.initState();
+    _city = widget.locationLabel;
     _loadData();
+    if (_city == null) _resolveCity();
+  }
+
+  Future<void> _resolveCity() async {
+    String? name;
+    final cached = await loadCachedDashboard(lat: widget.lat, lon: widget.lon);
+    name = _cityFrom(cached?.data);
+    if (name == null) {
+      name = _cityFrom(await fetchDashboardData(lat: widget.lat, lon: widget.lon));
+    }
+    if (name != null && mounted) setState(() => _city = name);
+  }
+
+  String? _cityFrom(Map<String, dynamic>? d) {
+    final loc = d?['location'];
+    final c = loc is Map ? loc['city'] : null;
+    return c is String && c.isNotEmpty ? c : null;
   }
 
   void _loadData() {
@@ -370,7 +394,7 @@ class _ScenariosPageState extends State<ScenariosPage> {
     final healthRisks = scenario['health_risks'] ?? [];
     final sources = scenario['main_sources'] ?? [];
     final aqiLabel = scenario['aqi_label']?.toString() ?? 'Unknown';
-    final location = "Nagpur";
+    final location = _city ?? '';
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cardColor = isDark ? Colors.grey[850] : Colors.grey[50];
 
