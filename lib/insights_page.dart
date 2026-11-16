@@ -473,7 +473,9 @@ class _InsightsPageState extends State<InsightsPage> {
                       color: isDark ? Colors.white : Colors.black87,
                     ),
                   ),
-                  Row(
+                  Flexible(
+                    child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       Icon(
                         Icons.location_on,
@@ -481,13 +483,17 @@ class _InsightsPageState extends State<InsightsPage> {
                         color: isDark ? Colors.white70 : Colors.black54,
                       ),
                       const SizedBox(width: 4),
-                      Text(
+                      Flexible(
+                        child: Text(
                         location['city'] ?? 'Unknown Location',
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
                         style: GoogleFonts.montserrat(
                           fontSize: 15,
                           color: isDark ? Colors.white : Colors.black87,
                           fontWeight: FontWeight.w500,
                         ),
+                      ),
                       ),
                       const SizedBox(width: 8),
                       Text(
@@ -498,6 +504,7 @@ class _InsightsPageState extends State<InsightsPage> {
                         ),
                       ),
                     ],
+                  ),
                   ),
                 ],
               ),
